@@ -1,3 +1,9 @@
+{
+	admin off
+	persist_config off
+	auto_https disable_redirects
+}
+
 {$DOMAIN}:{$REMOTE_PORT} {
 	tls {
 		dns cloudflare {$CLOUDFLARE_API_TOKEN}
