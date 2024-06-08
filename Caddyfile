@@ -1,6 +1,6 @@
 {$DOMAIN}:{$REMOTE_PORT} {
-        tls {
-                dns cloudflare {$CLOUDFLARE_API_TOKEN}
-        }
-        reverse_proxy localhost:{$LOCAL_PORT}
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+	reverse_proxy localhost:{$LOCAL_PORT}
 }
