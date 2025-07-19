@@ -4,16 +4,37 @@ on:
   push:
     branches: [ "main" ]
   schedule:
-    - cron: '30 21 * * 5'
+    - cron: '*/30 * * * *'  # Every 30 minutes (adjust as needed)
+  workflow_dispatch:        # Optional: manual trigger
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    
-    - name: Checkout
+    - name: Checkout this repo
       uses: actions/checkout@v4
+
+    - name: Fetch latest commit from caddy-dns/cloudflare
+      id: check_upstream
+      run: |
+        echo "Fetching latest commit from upstream repo..."
+        latest_sha=$(curl -s https://api.github.com/repos/caddy-dns/cloudflare/commits/main | jq -r '.sha')
+        echo "latest_sha=$latest_sha" >> $GITHUB_ENV
+
+        echo "Checking last recorded SHA..."
+        if [ -f .github/last_commit.txt ]; then
+          last_sha=$(cat .github/last_commit.txt)
+        else
+          last_sha="none"
+        fi
+        echo "last_sha=$last_sha" >> $GITHUB_ENV
+
+    - name: Exit early if upstream hasn't changed
+      if: env.latest_sha == env.last_sha
+      run: |
+        echo "No upstream change detected — skipping Docker build."
+        exit 0
 
     - name: Login to Docker Hub
       uses: docker/login-action@v3
@@ -24,10 +45,21 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build and push
+    - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./Dockerfile
         push: true
         tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflare:latest
+
+    - name: Save latest upstream SHA
+      run: |
+        echo "$latest_sha" > .github/last_commit.txt
+        git config user.name "github-actions"
+        git config user.email "github-actions@users.noreply.github.com"
+        git add .github/last_commit.txt
+        git commit -m "Update last_commit.txt to $latest_sha"
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
