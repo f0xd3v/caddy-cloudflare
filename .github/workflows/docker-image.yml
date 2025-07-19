@@ -55,11 +55,16 @@ jobs:
 
     - name: Save latest upstream SHA
       run: |
-        echo "$latest_sha" > .github/last_commit.txt
+        repo_url="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+        git remote set-url origin "$repo_url"
+
         git config user.name "github-actions"
         git config user.email "github-actions@users.noreply.github.com"
+
+        echo "$latest_sha" > .github/last_commit.txt
         git add .github/last_commit.txt
-        git commit -m "Update last_commit.txt to $latest_sha"
-        git push
+        git commit -m "Update last_commit.txt to $latest_sha" || echo "No changes to commit"
+        git push origin HEAD
+
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
