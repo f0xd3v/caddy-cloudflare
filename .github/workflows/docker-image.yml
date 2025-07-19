@@ -19,7 +19,7 @@ jobs:
       id: check_upstream
       run: |
         echo "Fetching latest commit from upstream repo..."
-        latest_sha=$(curl -s https://api.github.com/repos/caddy-dns/cloudflare/commits/main | jq -r '.sha')
+        latest_sha=$(curl -s https://api.github.com/repos/caddy-dns/cloudflare/commits/master | jq -r '.sha')
         echo "latest_sha=$latest_sha" >> $GITHUB_ENV
 
         echo "Checking last recorded SHA..."
