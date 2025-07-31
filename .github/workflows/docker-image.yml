@@ -1,64 +1,67 @@
-name: Rebuild image when upstream changes
+
+name: Rebuild on upstream change
 
 on:
   schedule:
     - cron: '17 6 * * *'   # run daily at 06:17
-  workflow_dispatch:       # manual trigger
+  workflow_dispatch:
 
 env:
-  UPSTREAM_REPO: caddy-dns/cloudflare   # owner/repo
+  UPSTREAM_REPO: caddy-dns/cloudflare   # <org>/<repo>
 
 jobs:
   check-and-build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read            # needs only read; cache token uses repo scope
+      contents: read          # just checkout
 
     steps:
-      - name: Checkout my repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # --------- retrieve the SHA we saw last cycle --------
-      - name: Retrieve last known upstream SHA
+      # Restore last-seen upstream commit
+      - name: Cache/restore last upstream SHA
+        id: cache
         uses: actions/cache@v4
         with:
           path: .upstream-sha
           key: upstream-sha-${{ env.UPSTREAM_REPO }}
+          # no restore-keys – we insist on exact match
 
-      # --------- get the new SHA from the upstream repo ----
-      - name: Determine latest upstream SHA
+      # Current upstream SHA
+      - name: Get latest upstream SHA
         id: upstream
         run: |
           set -euo pipefail
           latest=$(curl -sSf \
                      -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                     "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits/master" |
-                   jq -r '.sha')
+                     "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits/master" \
+                  | jq -r '.sha')
 
-          if [[ -z "$latest" || "$latest" == "null" ]]; then
+          [[ -z "$latest" || "$latest" = null ]] && {
             echo "::error::Could not fetch upstream SHA"
             exit 1
-          fi
-          echo "sha=$latest" >> "$GITHUB_OUTPUT"
+          }
+          echo "sha=$latest" >> $GITHUB_OUTPUT
 
-      # --------- compare SHAs and short-circuit if equal ----
-      - name: Compare SHAs
+      # Compare
+      - name: Check for change
         id: diff
         run: |
           last=""
           [[ -f .upstream-sha ]] && last=$(cat .upstream-sha)
-          echo "Last known  : $last"
-          echo "Current     : ${{ steps.upstream.outputs.sha }}"
           changed=$([ "$last" != "${{ steps.upstream.outputs.sha }}" ] && echo true || echo false)
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" | tee -a $GITHUB_OUTPUT
+          echo "last=$last / current=${{ steps.upstream.outputs.sha }}"
 
-      - name: Exit early if nothing changed
+      # Early exit when nothing changed
+      - name: Exit when no change
         if: steps.diff.outputs.changed != 'true'
         run: |
-          echo "No upstream change – skipping build."
+          echo "Upstream did not move – skipping build & update."
           exit 0
 
-      # --------- build & push the image --------------------
+      # Build and push (only on change)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -68,14 +71,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
+      - name: Build & push image
+        uses: docker/build-push-action@v6   # latest by default
         with:
           context: .
-          file: ./Dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflare:latest
 
-      # --------- cache the new SHA for next run --------------
-      - name: Save new upstream SHA in cache file
+      # Persist the new SHA (runs *only* if build succeeded)
+      - name: Save new upstream SHA
         run: echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
