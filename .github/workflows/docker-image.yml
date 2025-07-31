@@ -1,70 +1,81 @@
-name: Docker Image CI
+name: Rebuild image when upstream changes
 
 on:
-  push:
-    branches: [ "main" ]
   schedule:
-    - cron: '*/30 * * * *'  # Every 30 minutes (adjust as needed)
-  workflow_dispatch:        # Optional: manual trigger
+    - cron: '17 6 * * *'   # run daily at 06:17
+  workflow_dispatch:       # manual trigger
+
+env:
+  UPSTREAM_REPO: caddy-dns/cloudflare   # owner/repo
 
 jobs:
-  build:
+  check-and-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read            # needs only read; cache token uses repo scope
 
     steps:
-    - name: Checkout this repo
-      uses: actions/checkout@v4
+      - name: Checkout my repo
+        uses: actions/checkout@v4
 
-    - name: Fetch latest commit from caddy-dns/cloudflare
-      id: check_upstream
-      run: |
-        echo "Fetching latest commit from upstream repo..."
-        latest_sha=$(curl -s https://api.github.com/repos/caddy-dns/cloudflare/commits/master | jq -r '.sha')
-        echo "latest_sha=$latest_sha" >> $GITHUB_ENV
+      # --------- retrieve the SHA we saw last cycle --------
+      - name: Retrieve last known upstream SHA
+        uses: actions/cache@v4
+        with:
+          path: .upstream-sha
+          key: upstream-sha-${{ env.UPSTREAM_REPO }}
 
-        echo "Checking last recorded SHA..."
-        if [ -f .github/last_commit.txt ]; then
-          last_sha=$(cat .github/last_commit.txt)
-        else
-          last_sha="none"
-        fi
-        echo "last_sha=$last_sha" >> $GITHUB_ENV
+      # --------- get the new SHA from the upstream repo ----
+      - name: Determine latest upstream SHA
+        id: upstream
+        run: |
+          set -euo pipefail
+          latest=$(curl -sSf \
+                     -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                     "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits/master" |
+                   jq -r '.sha')
 
-    - name: Exit early if upstream hasn't changed
-      if: env.latest_sha == env.last_sha
-      run: |
-        echo "No upstream change detected — skipping Docker build."
-        exit 0
+          if [[ -z "$latest" || "$latest" == "null" ]]; then
+            echo "::error::Could not fetch upstream SHA"
+            exit 1
+          fi
+          echo "sha=$latest" >> "$GITHUB_OUTPUT"
 
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # --------- compare SHAs and short-circuit if equal ----
+      - name: Compare SHAs
+        id: diff
+        run: |
+          last=""
+          [[ -f .upstream-sha ]] && last=$(cat .upstream-sha)
+          echo "Last known  : $last"
+          echo "Current     : ${{ steps.upstream.outputs.sha }}"
+          changed=$([ "$last" != "${{ steps.upstream.outputs.sha }}" ] && echo true || echo false)
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Exit early if nothing changed
+        if: steps.diff.outputs.changed != 'true'
+        run: |
+          echo "No upstream change – skipping build."
+          exit 0
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        push: true
-        tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflare:latest
+      # --------- build & push the image --------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Save latest upstream SHA
-      run: |
-        repo_url="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-        git remote set-url origin "$repo_url"
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-        git config user.name "github-actions"
-        git config user.email "github-actions@users.noreply.github.com"
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflare:latest
 
-        echo "$latest_sha" > .github/last_commit.txt
-        git add .github/last_commit.txt
-        git commit -m "Update last_commit.txt to $latest_sha" || echo "No changes to commit"
-        git push origin HEAD
-
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # --------- cache the new SHA for next run --------------
+      - name: Save new upstream SHA in cache file
+        run: echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
