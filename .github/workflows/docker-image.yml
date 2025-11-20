@@ -24,8 +24,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .upstream-sha
-          key: upstream-sha-${{ env.UPSTREAM_REPO }}
-          # no restore-keys – we insist on exact match
+          key: upstream-sha-${{ github.run_id }}
+          restore-keys: |
+            upstream-sha-
 
       # Current upstream SHA
       - name: Get latest upstream SHA
@@ -81,6 +82,6 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflare:latest
 
       # Persist the new SHA (runs *only* if build succeeded)
-      - name: Save new upstream SHA
+      - name: Save new upstream SHA  (for next run)
         if: steps.diff.outputs.changed == 'true'
         run: echo "${{ steps.upstream.outputs.sha }}" > .upstream-sha
